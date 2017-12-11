@@ -41,6 +41,9 @@ extern struct window_procs Gnome_procs;
 #ifdef MSWIN_GRAPHICS
 extern struct window_procs mswin_procs;
 #endif
+#ifdef SDL_GRAPHICS
+extern struct window_procs sdl_procs;
+#endif
 #ifdef WINCHAIN
 extern struct window_procs chainin_procs;
 extern void FDECL(chainin_procs_init, (int));
@@ -127,6 +130,9 @@ static struct win_choices {
 
     { (struct window_procs *) &trace_procs, trace_procs_init,
       trace_procs_chain },
+#endif
+#ifdef SDL_GRAPHICS
+    { &sdl_procs, 0 CHAINR(0) },
 #endif
     { 0, 0 CHAINR(0) } /* must be last */
 };

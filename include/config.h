@@ -53,7 +53,7 @@
  * Define the default window system.  This should be one that is compiled
  * into your system (see defines above).  Known window systems are:
  *
- *      tty, X11, mac, amii, BeOS, Qt, Gem, Gnome
+ *      tty, X11, mac, amii, BeOS, Qt, Gem, Gnome, SDL
  */
 
 /* MAC also means MAC windows */
@@ -133,6 +133,9 @@
 #ifndef DEFAULT_WC_TILED_MAP
 #define DEFAULT_WC_TILED_MAP /* Default to tiles */
 #endif
+#endif
+
+#ifdef SDL_GRAPHICS
 #endif
 
 /*

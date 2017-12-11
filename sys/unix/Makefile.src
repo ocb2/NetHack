@@ -127,7 +127,8 @@ SYSOBJ = ioctl.o unixmain.o unixtty.o unixunix.o unixres.o
 
 # flags for Linux
 #   compile normally
-# CFLAGS = -O2 -fomit-frame-pointer -I../include
+#CFLAGS = -O2 -fomit-frame-pointer -I../include
+
 # LFLAGS = -L/usr/X11R6/lib
 #   OR compile backwards compatible a.out format
 # CFLAGS = -O2 -b i486-linuxaout -fomit-frame-pointer -I../include
@@ -241,6 +242,9 @@ WINBEOBJ =
 #	../win/BeOS/NHMenuWindow.cpp ../win/BeOS/NHMapWindow.cpp tile.c
 #WINBEOBJ = winbe.o NHWindow.o NHMenuWindow.o NHMapWindow.o tile.o
 
+WINSDLSRC = ../win/sdl/winsdl.c
+WINSDLOBJ = winsdl.o
+
 #
 #
 #WINSRC = $(WINTTYSRC)
@@ -259,7 +263,7 @@ WINBEOBJ =
 # WINTTYLIB = -ltermcap
 # WINTTYLIB = -lcurses
 # WINTTYLIB = -lcurses16
-# WINTTYLIB = -lncurses
+WINTTYLIB = -lncurses
 #WINTTYLIB = -ltermlib
 #
 # libraries for X11
@@ -286,6 +290,9 @@ WINGEMLIB = -le_gem -lgem
 #
 # libraries for BeOS 
 WINBELIB = -lbe
+
+# libraries for SDL
+WINSDLLIB = -D_REENTRANT -lm -pthread -lGL -lGLEW -lSDL2 -lSDL2_image -lSDL2_ttf
 
 #WINLIB = $(WINTTYLIB)
 
@@ -740,6 +747,8 @@ winmisc.o: ../win/X11/winmisc.c $(HACK_H) ../include/func_tab.h \
 	$(CC) $(CFLAGS) -c ../win/X11/winmisc.c
 winstat.o: ../win/X11/winstat.c $(HACK_H) ../include/winX.h
 	$(CC) $(CFLAGS) -c ../win/X11/winstat.c
+winsdl.o: ../win/sdl/winsdl.c $(HACK_H) ../include/winsdl.h
+	$(CC) $(CFLAGS) -c ../win/sdl/winsdl.c
 wintext.o: ../win/X11/wintext.c $(HACK_H) ../include/winX.h ../include/xwindow.h
 	$(CC) $(CFLAGS) -c ../win/X11/wintext.c
 winval.o: ../win/X11/winval.c $(HACK_H) ../include/winX.h

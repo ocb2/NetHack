@@ -1568,6 +1568,9 @@ static struct win_info window_opts[] = {
 #ifdef GNOME_GRAPHICS
     { "Gnome", "Gnome" },
 #endif
+#ifdef SDL_GRAPHICS
+    { "SDL", "SDL" },
+#endif
 #ifdef MAC
     { "mac", "Mac" },
 #endif
