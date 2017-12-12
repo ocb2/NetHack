@@ -199,6 +199,7 @@ void sdl_list_free(struct sdl_list *list, void (*data_free)(void*)) {
 struct sdl_win {
   // offset by 1 so we know if a menu is not in use (type==0)
   wintype type;
+  int len;
   union {
     struct sdl_list *lines;
     struct sdl_list *entries;
@@ -213,6 +214,20 @@ struct sdl_win_entry {
   int attr;
   char *str;
   boolean preselected;
+  bool selected;
+};
+
+// structures for sdl_nk_arg
+struct sdl_nk_yn {
+  const char *ques;
+  const char *choices;
+  char def;
+  char ret;
+};
+
+struct sdl_nk_menu {
+  windid window;
+  int how;
 };
 
 // this is probably defined somewhere else
@@ -364,26 +379,12 @@ GLuint sdl_gl_map_y = 0;
 int sdl_gl_win_w = 0;
 int sdl_gl_win_h = 0;
 
-// nuklear
+// nuklear context
 struct nk_context *sdl_nk_ctx;
 // menu function
-bool (*sdl_nk_func)() = NULL;
-
-// for passing arguments from sdl_yn_function to sdl_nk_menu_yn, and for state
-// to be maintained between calls to sdl_nk_func
-// having this many globals is kind of gross but i'm not sure of a better way
-// to do it
-const char *sdl_nk_yn_ques = NULL;
-const char *sdl_nk_yn_choices = NULL;
-char sdl_nk_yn_default = 0;
-char sdl_nk_yn_return = 0;
-
-int sdl_nk_menu_idx = 0;
-int sdl_nk_menu_init = 0;
-int *sdl_nk_menu_selected = NULL;
-int sdl_nk_list_len = 0;
-
-char *sdl_nk_text_str = NULL;
+bool (*sdl_nk_func)(void*) = NULL;
+// argument to menu function
+void *sdl_nk_arg = NULL;
 
 // cursor location
 int sdl_curs_x = 0;
@@ -577,7 +578,7 @@ struct nk_rect sdl_nk_tile(int idx) {
 }
 
 // TODO: NULL ques
-bool sdl_nk_yn(void) {
+bool sdl_nk_yn(struct sdl_nk_yn *yn) {
   bool term = false;
 
   int i;
@@ -588,8 +589,7 @@ bool sdl_nk_yn(void) {
   int y = floor((sdl_gl_win_h - h) / 2.0);
 
 #ifdef DEBUG
-  assert(sdl_nk_yn_ques);
-  assert(sdl_nk_yn_choices);
+  assert(yn->ques);
 #endif
 
   if (nk_begin(sdl_nk_ctx,
@@ -597,13 +597,13 @@ bool sdl_nk_yn(void) {
                nk_rect(x, y, w, h),
                NK_WINDOW_BORDER)) {
     nk_layout_row_dynamic(sdl_nk_ctx, 80, 1);
-    nk_label_wrap(sdl_nk_ctx, sdl_nk_yn_ques);
-    while (c = sdl_nk_yn_choices[i++]) {
+    nk_label_wrap(sdl_nk_ctx, yn->ques);
+    while (c = yn->choices[i++]) {
       char button[2];
       button[0] = c;
       button[1] = 0;
       if (nk_button_label(sdl_nk_ctx, &button)) {
-        sdl_nk_yn_return = c;
+        yn->ret = c;
         term = true;
         break;
       }
@@ -612,20 +612,15 @@ bool sdl_nk_yn(void) {
   
   nk_end(sdl_nk_ctx);
 
-  #ifdef DEBUG
-  if (!sdl_nk_func) {
-    sdl_nk_yn_ques = NULL;
-    sdl_nk_yn_choices = NULL;
-  }
-  #endif
-
   return term;
 }
 
-bool sdl_nk_menu(void) {
+bool sdl_nk_menu(struct sdl_nk_menu *arg) {
   bool term = false;
 
-  struct sdl_list *list = sdl_win[sdl_nk_menu_idx].entries;
+  int list_len = sdl_win[arg->window].len;
+  //printf("len=%d %d %p\n", list_len, arg->window, arg);
+  struct sdl_list *list = sdl_win[arg->window].entries;
   struct nk_list_view nk_list;
 
   int w = floor(sdl_gl_win_w * NH_SDL_UI_SCALE_W);
@@ -633,14 +628,6 @@ bool sdl_nk_menu(void) {
   int x = floor((sdl_gl_win_w - w) / 2.0);
   int y = floor((sdl_gl_win_h - h) / 2.0);
 
-  if (sdl_nk_menu_init == 0) {
-    sdl_nk_list_len = sdl_list_len(list);
-    sdl_nk_menu_selected = calloc(sdl_nk_list_len, sizeof(int));
-    sdl_nk_menu_init = 1;
-  }
-
-  int list_len = sdl_nk_list_len;
-  int *entries = sdl_nk_menu_selected;
   int i = 0;
 
   if (nk_begin(sdl_nk_ctx,
@@ -654,12 +641,12 @@ bool sdl_nk_menu(void) {
       nk_layout_row_dynamic(sdl_nk_ctx, 30, 1);
       if (entry->glyph != NO_GLYPH) {
         struct nk_rect rect = sdl_nk_tile(glyph2tile[entry->glyph]);
-        entries[i] = nk_select_image_label(sdl_nk_ctx, nk_subimage_id(sdl_gl_tex_map, NH_SDL_TILEMAP_X, NH_SDL_TILEMAP_Y, rect), entry->str, NK_TEXT_RIGHT, entries[i]);
+        entry->selected = nk_select_image_label(sdl_nk_ctx, nk_subimage_id(sdl_gl_tex_map, NH_SDL_TILEMAP_X, NH_SDL_TILEMAP_Y, rect), entry->str, NK_TEXT_RIGHT, entry->selected ? 1 : 0) ? true : false;
       } else {
-        entries[i] = nk_select_label(sdl_nk_ctx, entry->str, NK_TEXT_LEFT, entries[i]);
+        entry->selected = nk_select_label(sdl_nk_ctx, entry->str, NK_TEXT_LEFT, entry->selected ? 1 : 0) ? true : false;
       }
       i++;
-      list = (struct sdl_list*)list->next;
+      list = list->next;
     }
     nk_list_view_end(&nk_list);
 
@@ -675,12 +662,6 @@ bool sdl_nk_menu(void) {
   
   nk_end(sdl_nk_ctx);
 
-  if (term) {
-    sdl_nk_menu_init = 0;
-    free(sdl_nk_menu_selected);
-    sdl_nk_menu_selected = NULL;
-  }
-  
   return term;
 }
 
@@ -1396,7 +1377,7 @@ void sdl_loop(void) {
       }
       nk_input_end(sdl_nk_ctx);
       
-      term = sdl_nk_func();
+      term = sdl_nk_func(sdl_nk_arg);
     } else {
       while (SDL_PollEvent(&event)) {
         switch (event.type) {
@@ -1507,6 +1488,7 @@ void sdl_loop(void) {
       term = false;
 
       pthread_mutex_lock(&sdl_thread_menu_mutex);
+      sdl_nk_arg = NULL;
       sdl_nk_func = NULL;
       pthread_cond_signal(&sdl_thread_menu);
       pthread_mutex_unlock(&sdl_thread_menu_mutex);
@@ -1596,6 +1578,7 @@ void sdl_start_menu(windid window) {
   UNDEFINED();
   if (sdl_win[window].entries) {
     sdl_list_free(sdl_win[window].entries, free);
+    sdl_win[window].len = 0;
     sdl_win[window].entries = NULL;
     sdl_list_last = NULL;
   }
@@ -1622,6 +1605,7 @@ void sdl_add_menu(windid window,
   entry->attr = attr;
   entry->str = str;
   entry->preselected = preselected;
+  entry->selected = false;
 
   if (!sdl_win[window].entries) {
     sdl_win[window].entries = list;
@@ -1629,6 +1613,8 @@ void sdl_add_menu(windid window,
   } else {
     sdl_list_append(sdl_win[window].entries, entry);
   }
+
+  sdl_win[window].len++;
 }
 
 void sdl_end_menu(windid window, char *prompt) {
@@ -1638,14 +1624,23 @@ void sdl_end_menu(windid window, char *prompt) {
 }
 
 int sdl_select_menu(windid window, int how, menu_item **selected) {
+  struct sdl_list *list;
+  struct sdl_win_entry *entry;
+  menu_item *item;
+  int o=0;
   UNDEFINED();
   if (sdl_win[window].type-1 == NHW_MENU) {
-    sdl_nk_menu_idx = window;
+    struct sdl_nk_menu arg = {
+      .window = window,
+      .how = how
+    };
+    //printf("select %d %p\n", window, &arg);
+    sdl_nk_arg = &arg;
     sdl_nk_func = sdl_nk_menu;
   } else if (sdl_win[window].type-1 == NHW_TEXT) {
     printf("undefined in select-menu\n");
     exit(0);
-    sdl_nk_text_str = sdl_list_str(sdl_win[window].lines);
+    sdl_nk_arg = sdl_list_str(sdl_win[window].lines);
     sdl_nk_func = sdl_nk_text;
   } else {
     fprintf(stderr, "SDL: error: invalid window type\n");
@@ -1656,8 +1651,31 @@ int sdl_select_menu(windid window, int how, menu_item **selected) {
   pthread_cond_wait(&sdl_thread_menu, &sdl_thread_menu_mutex);
   pthread_mutex_unlock(&sdl_thread_menu_mutex);
 
-  //return sdl_nk_menu_selected;
-  return -1;
+  // FIXME: we iterate over this twice?
+  // partially copied from wintty.c's tty_select_menu
+  for (list = sdl_win[window].entries; list; list=list->next) {
+    entry = (struct sdl_win_entry *)list->data;
+    if (entry->selected) {
+      o++;
+    }
+  }
+
+  if (o) {
+    *selected = (menu_item *)malloc(sizeof(menu_item) * o);
+    for (item = *selected,
+         list = sdl_win[window].entries; list; list=list->next) {
+      entry = (struct sdl_win_entry *)list->data;
+      if (entry->selected) {
+        item->item = entry->identifier;
+        item->count = -1;
+        item++;
+      }
+    }
+  } else {
+    selected = NULL;
+  }
+
+  return o;
 }
 
 void sdl_update_inventory(void) {
@@ -1746,17 +1764,20 @@ void sdl_doprev_message(void) {
 }
 
 char sdl_yn_function(const char *ques, const char *choices, char def) {
-  printf("y/n %s %s %c\n", ques, choices, def);
-  sdl_nk_yn_ques = ques;
-  sdl_nk_yn_choices = choices;
-  sdl_nk_yn_default = def;
+  struct sdl_nk_yn yn = {
+    .ques = ques,
+    .choices = choices,
+    .def = def
+  };
+
+  sdl_nk_arg = (void *)&yn;
   sdl_nk_func = sdl_nk_yn;
 
   pthread_mutex_lock(&sdl_thread_menu_mutex);
   pthread_cond_wait(&sdl_thread_menu, &sdl_thread_menu_mutex);
   pthread_mutex_unlock(&sdl_thread_menu_mutex);
 
-  return sdl_nk_yn_return;
+  return yn.ret;
 }
 
 void sdl_getlin(const char *ques, char *input) {
