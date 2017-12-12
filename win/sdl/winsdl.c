@@ -273,13 +273,22 @@ struct sdl_nk_media {
 };
 
 // globals
+
+// pipe
+int sdl_thread_fd[2];
+// the init barrier synchronizes SDL/OpenGL initialization in the drawing thread
+// with the main thread, so that sdl_init_nhwindows doesn't return before
+// everything is initialized
+pthread_barrier_t sdl_thread_init;
+// the menu cond/mutex are for returning data from a menu
+pthread_cond_t sdl_thread_menu;
+pthread_mutex_t sdl_thread_menu_mutex;
+
 windid sdl_win_id = 0;
 struct sdl_win sdl_win[NH_SDL_WIN_MAX] = {0};
 struct sdl_status_state sdl_status_state;
 SDL_Window *sdl_window;
 SDL_GLContext *sdl_context;
-// we need this as an SDL surface for NK
-SDL_Surface *sdl_tilemap;
 TTF_Font *sdl_font;
 SDL_GameController *sdl_controller;
 SDL_Joystick *sdl_joystick;
@@ -358,7 +367,7 @@ int sdl_gl_win_h = 0;
 // nuklear
 struct nk_context *sdl_nk_ctx;
 // menu function
-void (*sdl_nk_func)() = NULL;
+bool (*sdl_nk_func)() = NULL;
 
 // for passing arguments from sdl_yn_function to sdl_nk_menu_yn, and for state
 // to be maintained between calls to sdl_nk_func
@@ -567,30 +576,10 @@ struct nk_rect sdl_nk_tile(int idx) {
   return rect;
 }
 
-void sdl_nk_menu_demo() {
-  if (nk_begin(sdl_nk_ctx, "Demo1", nk_rect(50, 50, 200, 200),
-               NK_WINDOW_BORDER|NK_WINDOW_TITLE))
-    {
-      enum {EASY, HARD};
-      static int op = EASY;
-      static int property = 20;
-
-      nk_layout_row_static(sdl_nk_ctx, 30, 80, 1);
-      if (nk_button_label(sdl_nk_ctx, "button")) {
-        printf("button pressed!\n");
-        sdl_nk_func = NULL;
-      }
-      nk_layout_row_dynamic(sdl_nk_ctx, 30, 2);
-      if (nk_option_label(sdl_nk_ctx, "easy", op == EASY)) op = EASY;
-      if (nk_option_label(sdl_nk_ctx, "hard", op == HARD)) op = HARD;
-      nk_layout_row_dynamic(sdl_nk_ctx, 22, 1);
-      nk_property_int(sdl_nk_ctx, "Compression:", 0, &property, 100, 10, 1);
-    }
-  nk_end(sdl_nk_ctx);
-}
-
 // TODO: NULL ques
-void sdl_nk_yn() {
+bool sdl_nk_yn(void) {
+  bool term = false;
+
   int i;
   char c;
   int w = floor(sdl_gl_win_w * NH_SDL_UI_SCALE_W);
@@ -615,7 +604,7 @@ void sdl_nk_yn() {
       button[1] = 0;
       if (nk_button_label(sdl_nk_ctx, &button)) {
         sdl_nk_yn_return = c;
-        sdl_nk_func = NULL;
+        term = true;
         break;
       }
     } 
@@ -629,9 +618,13 @@ void sdl_nk_yn() {
     sdl_nk_yn_choices = NULL;
   }
   #endif
+
+  return term;
 }
 
-void sdl_nk_menu() {
+bool sdl_nk_menu(void) {
+  bool term = false;
+
   struct sdl_list *list = sdl_win[sdl_nk_menu_idx].entries;
   struct nk_list_view nk_list;
 
@@ -673,50 +666,26 @@ void sdl_nk_menu() {
     nk_layout_row_dynamic(sdl_nk_ctx, 30, 2);
 
     if (nk_button_label(sdl_nk_ctx, "Ok")) {
-      sdl_nk_func = NULL;
+      term = true;
     }
     if (nk_button_label(sdl_nk_ctx, "Cancel")) {
-      sdl_nk_func = NULL;
+      term = true;
     }
   }
   
   nk_end(sdl_nk_ctx);
+
+  if (term) {
+    sdl_nk_menu_init = 0;
+    free(sdl_nk_menu_selected);
+    sdl_nk_menu_selected = NULL;
+  }
+  
+  return term;
 }
 
 void sdl_nk_text() {
 
-}
-
-void sdl_nk_loop() {
-  int p;
-  SDL_Event event;
-  void (*func)() = sdl_nk_func;
-
-  SDL_EventState(SDL_MOUSEMOTION, SDL_ENABLE);
-  while (func && sdl_nk_func) {
-    // block until there is at least one event
-    SDL_WaitEvent(NULL);
-
-    nk_input_begin(sdl_nk_ctx);
-    while (SDL_PollEvent(&event)) {
-      nk_sdl_handle_event(&event);
-    }
-    nk_input_end(sdl_nk_ctx);
-
-    sdl_nk_func();
-
-    // we have to nk_sdl_render() after sdl_nk_func() or it errors the next it
-    // is run due to thinking there are two windows with the same name
-    if (!sdl_nk_func) {
-      sdl_nk_func = func;
-      func = NULL;
-    }
-
-    sdl_redraw();
-  }
-
-  sdl_nk_func = NULL;
-  sdl_redraw();
 }
 
 // OpenGL drawing functions
@@ -979,26 +948,7 @@ void sdl_redraw() {
   SDL_GL_SwapWindow(sdl_window);
 }
 
-int sdl_init(void *fd) {
-  sdl_loop();
-}
-
-// main loop for drawing/input thread
-void sdl_loop(void) {
-  while (true) {
-    printf("balls\n");
-    sleep(1);
-  }
-}
-
-// nethack window API
-void sdl_init_nhwindows(int *argcp, char **argv) {
-  int fd[2];
-  pipe(fd);
-  pthread_t thread;
-  pthread_attr_t thread_attr;
-  pthread_attr_init(&thread_attr);
-  pthread_create(&thread, &thread_attr, &sdl_init, &fd[1]);
+int sdl_init(void) {
 
   SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER);
 
@@ -1074,7 +1024,6 @@ void sdl_init_nhwindows(int *argcp, char **argv) {
   sdl_gl_mat_proj_loc = glGetUniformLocation(shader, "projection");
   sdl_gl_hud_proj_loc = glGetUniformLocation(sdl_gl_shader_hud, "projection");
 
-  sdl_tilemap = IMG_Load(NH_SDL_PATH_TILE);
   sdl_gl_tex_map = sdl_gl_texture(IMG_Load(NH_SDL_PATH_TILE));
   glUniform1i(glGetUniformLocation(shader, "tilemap"), 0);
 
@@ -1424,6 +1373,163 @@ void sdl_init_nhwindows(int *argcp, char **argv) {
   sdl_nk_ctx->style.chart.color = nk_rgb(95,95,95);
   sdl_nk_ctx->style.chart.selected_color = nk_rgb(255,0,0);
   sdl_nk_ctx->style.chart.border = 1;
+
+  pthread_barrier_wait(&sdl_thread_init);
+  sdl_loop();
+}
+
+// main loop for drawing/input thread
+void sdl_loop(void) {
+  SDL_Event event;
+  int r;
+  char *s;
+  int i, o, c, p = 0;
+  bool term = false;
+
+  while (true) {
+    if (sdl_nk_func) {
+      SDL_EventState(SDL_MOUSEMOTION, SDL_ENABLE);
+
+      nk_input_begin(sdl_nk_ctx);
+      while (SDL_PollEvent(&event)) {
+        nk_sdl_handle_event(&event);
+      }
+      nk_input_end(sdl_nk_ctx);
+      
+      term = sdl_nk_func();
+    } else {
+      while (SDL_PollEvent(&event)) {
+        switch (event.type) {
+        case SDL_QUIT:
+          break;
+        
+        case SDL_KEYDOWN:
+          switch (event.key.keysym.sym) {
+          case SDLK_ESCAPE:
+          case SDLK_q:
+            //return 'S';
+            r = 'S';
+            break;
+          case SDLK_UP:
+            //return 'k';
+            r = 'k';
+            break;
+          case SDLK_LEFT:
+            //return 'h';
+            r = 'h';
+            break;
+          case SDLK_DOWN:
+            //return 'j';
+            r = 'j';
+            break;
+          case SDLK_RIGHT:
+            //return 'l';
+            r = 'l';
+            break;
+          default:
+            s = SDL_GetKeyName(event.key.keysym.sym);
+            printf("keyname: %s\n", s);
+            // check if its string representation has only one character
+            // this is to filter out dead keys
+            if (!(*(s+1))) {
+              r = event.key.keysym.sym;
+            }
+            break;
+          }
+          break;
+
+        case SDL_MOUSEBUTTONDOWN:
+          sdl_curs_state = true;
+          SDL_GetMouseState(&i, &o);
+          sdl_curs_x = i;
+          sdl_curs_y = o;
+          break;
+        case SDL_MOUSEBUTTONUP:
+          sdl_curs_state = false;
+          SDL_GetMouseState(&i, &o);
+          sdl_curs_x = i;
+          sdl_curs_y = o;
+          break;
+        case SDL_MOUSEWHEEL:
+          if (event.wheel.y > 0) {
+            sdl_gl_zoom(NH_SDL_GL_ZOOM);
+            sdl_redraw_ = true;
+          } else {
+            sdl_gl_zoom(-NH_SDL_GL_ZOOM);
+            sdl_redraw_ = true;
+          }
+          break;
+
+        case SDL_CONTROLLERBUTTONDOWN:
+          i = sdl_input_controller(&event);
+          if (i) r = i;
+          break;
+        
+        case SDL_WINDOWEVENT:
+          switch (event.window.event) {
+          case SDL_WINDOWEVENT_SHOWN:
+          case SDL_WINDOWEVENT_HIDDEN:
+          case SDL_WINDOWEVENT_EXPOSED:
+          case SDL_WINDOWEVENT_MOVED:
+          case SDL_WINDOWEVENT_SIZE_CHANGED:
+          case SDL_WINDOWEVENT_RESTORED:
+            SDL_GetWindowSize(sdl_window, &i, &o);
+            sdl_gl_win_w = i;
+            sdl_gl_win_h = o;
+            sdl_redraw_ = true;
+            break;
+          default:
+            break;
+          }
+        }
+
+        if (sdl_curs_state) {
+          SDL_GetMouseState(&i, &o);
+          if ((i != sdl_curs_x) || (o != sdl_curs_y)) {
+            sdl_gl_mat_view[12] += i - sdl_curs_x;
+            sdl_gl_mat_view[13] += o - sdl_curs_y;
+            sdl_curs_x = i;
+            sdl_curs_y = o;
+          }
+        }
+      }
+
+      if (r) {
+        write(sdl_thread_fd[1], &r, sizeof(int));
+        r = 0;
+      }
+    }
+    
+    sdl_redraw();
+
+    if (term) {
+      printf("in term");
+      term = false;
+
+      pthread_mutex_lock(&sdl_thread_menu_mutex);
+      sdl_nk_func = NULL;
+      pthread_cond_signal(&sdl_thread_menu);
+      pthread_mutex_unlock(&sdl_thread_menu_mutex);
+    }
+  }
+}
+
+// nethack window API
+void sdl_init_nhwindows(int *argcp, char **argv) {
+  pthread_t thread;
+  pthread_attr_t thread_attr;
+
+  pipe(sdl_thread_fd);
+
+  pthread_attr_init(&thread_attr);
+  pthread_barrier_init(&sdl_thread_init, NULL, 2);
+  pthread_cond_init(&sdl_thread_menu, NULL);
+  pthread_mutex_init(&sdl_thread_menu_mutex, NULL);
+
+  pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
+  pthread_create(&thread, &thread_attr, &sdl_init, NULL);
+  pthread_barrier_wait(&sdl_thread_init);
+  pthread_barrier_destroy(&sdl_thread_init);
 }
 
 void sdl_player_selection(void) {
@@ -1467,12 +1573,12 @@ void sdl_display_nhwindow(windid window, boolean blocking) {
 }
 
 void sdl_destroy_nhwindow(windid window) {
+  UNDEFINED();
   sdl_list_free(sdl_win[window].entries, free);
   memset(&sdl_win[window], 0, sizeof(struct sdl_win));
 }
 
 void sdl_curs(windid window, int x, int y) {
-  REDRAW();
   UNDEFINED();
 }
 
@@ -1488,6 +1594,11 @@ void sdl_display_file(char *str, boolean complain) {
 
 void sdl_start_menu(windid window) {
   UNDEFINED();
+  if (sdl_win[window].entries) {
+    sdl_list_free(sdl_win[window].entries, free);
+    sdl_win[window].entries = NULL;
+    sdl_list_last = NULL;
+  }
 }
 
 void sdl_add_menu(windid window,
@@ -1498,6 +1609,7 @@ void sdl_add_menu(windid window,
                   int attr,
                   char *str,
                   boolean preselected) {
+  UNDEFINED();
   struct sdl_list *list = (struct sdl_list*)calloc(1, sizeof(struct sdl_list));
   struct sdl_win_entry *entry = (struct sdl_win_entry*)calloc(1, sizeof(struct sdl_win_entry));
 
@@ -1526,6 +1638,7 @@ void sdl_end_menu(windid window, char *prompt) {
 }
 
 int sdl_select_menu(windid window, int how, menu_item **selected) {
+  UNDEFINED();
   if (sdl_win[window].type-1 == NHW_MENU) {
     sdl_nk_menu_idx = window;
     sdl_nk_func = sdl_nk_menu;
@@ -1539,7 +1652,9 @@ int sdl_select_menu(windid window, int how, menu_item **selected) {
     exit(NH_SDL_ERROR_WIN_TYPE);
   }
 
-  sdl_nk_loop();
+  pthread_mutex_lock(&sdl_thread_menu_mutex);
+  pthread_cond_wait(&sdl_thread_menu, &sdl_thread_menu_mutex);
+  pthread_mutex_unlock(&sdl_thread_menu_mutex);
 
   //return sdl_nk_menu_selected;
   return -1;
@@ -1563,6 +1678,7 @@ void sdl_cliparound(int x, int y) {
 }
 
 void sdl_print_glyph(windid window, int x, int y, int glyph, int bkglyph) {
+  UNDEFINED();
   #ifdef DEBUG
   assert(x < NH_SDL_MAP_WIDTH);
   assert(y < NH_SDL_MAP_HEIGHT);
@@ -1615,123 +1731,10 @@ inline int sdl_input_controller(SDL_Event *event) {
   }
 }
 
-// this is basically our event loop, since nethack has the real one
-// we return to give a key to the nethack engine
 int sdl_nh_poskey(int *x, int *y, int *mod) {
-  printf("in poskey\n");
-  char *s;
-  int i, o, c, p = 0;
-  SDL_Event event;
-
-  // filter out mouse motion events so they don't spam the event queue
-  SDL_EventState(SDL_MOUSEMOTION, SDL_DISABLE);
-  do {
-    p = SDL_PollEvent(&event);
-    if (sdl_nk_func) {
-      // give nk all of the events while a menu is up
-      sdl_nk_loop();
-      SDL_EventState(SDL_MOUSEMOTION, SDL_DISABLE);
-    } else if (p) {
-      switch (event.type) {
-      case SDL_QUIT:
-        break;
-        
-      case SDL_KEYDOWN:
-        switch (event.key.keysym.sym) {
-        case SDLK_ESCAPE:
-        case SDLK_q:
-          return 'S';
-          break;
-        case SDLK_UP:
-          sdl_redraw_ = true;
-          return 'k';
-          break;
-        case SDLK_LEFT:
-          sdl_redraw_ = true;
-          return 'h';
-          break;
-        case SDLK_DOWN:
-          sdl_redraw_ = true;
-          return 'j';
-          break;
-        case SDLK_RIGHT:
-          sdl_redraw_ = true;
-          return 'l';
-          break;
-        default:
-          s = SDL_GetKeyName(event.key.keysym.sym);
-          printf("keyname: %s\n", s);
-          // check if its string representation has only one character
-          // this is to filter out dead keys
-          if (!(*(s+1))) {
-            return event.key.keysym.sym;
-          }
-          break;
-        case SDLK_e:
-          sdl_nk_func = sdl_nk_menu_demo;
-          sdl_redraw_ = true;
-          break;
-        }
-        break;
-
-      case SDL_MOUSEBUTTONDOWN:
-        sdl_curs_state = true;
-        SDL_GetMouseState(&i, &o);
-        sdl_curs_x = i;
-        sdl_curs_y = o;
-        break;
-      case SDL_MOUSEBUTTONUP:
-        sdl_curs_state = false;
-        SDL_GetMouseState(&i, &o);
-        sdl_curs_x = i;
-        sdl_curs_y = o;
-        break;
-      case SDL_MOUSEWHEEL:
-        if (event.wheel.y > 0) {
-          sdl_gl_zoom(NH_SDL_GL_ZOOM);
-          sdl_redraw_ = true;
-        } else {
-          sdl_gl_zoom(-NH_SDL_GL_ZOOM);
-          sdl_redraw_ = true;
-        }
-        break;
-
-      case SDL_CONTROLLERBUTTONDOWN:
-        i = sdl_input_controller(&event);
-        if (i) return i;
-        break;
-        
-      case SDL_WINDOWEVENT:
-        switch (event.window.event) {
-        case SDL_WINDOWEVENT_SHOWN:
-        case SDL_WINDOWEVENT_HIDDEN:
-        case SDL_WINDOWEVENT_EXPOSED:
-        case SDL_WINDOWEVENT_MOVED:
-        case SDL_WINDOWEVENT_SIZE_CHANGED:
-        case SDL_WINDOWEVENT_RESTORED:
-          SDL_GetWindowSize(sdl_window, &i, &o);
-          sdl_gl_win_w = i;
-          sdl_gl_win_h = o;
-          sdl_redraw_ = true;
-          break;
-        default:
-          break;
-        }
-      }
-    } else {
-      if (sdl_curs_state) {
-        SDL_GetMouseState(&i, &o);
-        if ((i != sdl_curs_x) || (o != sdl_curs_y)) {
-          sdl_gl_mat_view[12] += i - sdl_curs_x;
-          sdl_gl_mat_view[13] += o - sdl_curs_y;
-          sdl_curs_x = i;
-          sdl_curs_y = o;
-          sdl_redraw();
-        }
-      }
-      REDRAW();
-    }
-  } while (true);
+  int c;
+  read(sdl_thread_fd[0], &c, sizeof(int));
+  return c;
 }
 
 void sdl_nhbell(void) {
@@ -1748,7 +1751,11 @@ char sdl_yn_function(const char *ques, const char *choices, char def) {
   sdl_nk_yn_choices = choices;
   sdl_nk_yn_default = def;
   sdl_nk_func = sdl_nk_yn;
-  sdl_nk_loop();
+
+  pthread_mutex_lock(&sdl_thread_menu_mutex);
+  pthread_cond_wait(&sdl_thread_menu, &sdl_thread_menu_mutex);
+  pthread_mutex_unlock(&sdl_thread_menu_mutex);
+
   return sdl_nk_yn_return;
 }
 
