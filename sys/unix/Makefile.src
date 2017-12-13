@@ -242,8 +242,8 @@ WINBEOBJ =
 #	../win/BeOS/NHMenuWindow.cpp ../win/BeOS/NHMapWindow.cpp tile.c
 #WINBEOBJ = winbe.o NHWindow.o NHMenuWindow.o NHMapWindow.o tile.o
 
-WINSDLSRC = ../win/sdl/winsdl.c
-WINSDLOBJ = winsdl.o
+WINSDLSRC = ../win/sdl/winsdl.c ../win/sdl/sdldraw.c
+WINSDLOBJ = winsdl.o sdldraw.o
 
 #
 #
@@ -749,6 +749,8 @@ winstat.o: ../win/X11/winstat.c $(HACK_H) ../include/winX.h
 	$(CC) $(CFLAGS) -c ../win/X11/winstat.c
 winsdl.o: ../win/sdl/winsdl.c $(HACK_H) ../include/winsdl.h
 	$(CC) $(CFLAGS) -c ../win/sdl/winsdl.c
+sdldraw.o: ../win/sdl/sdldraw.c $(HACK_H) ../include/winsdl.h
+	$(CC) $(CFLAGS) -c ../win/sdl/sdldraw.c
 wintext.o: ../win/X11/wintext.c $(HACK_H) ../include/winX.h ../include/xwindow.h
 	$(CC) $(CFLAGS) -c ../win/X11/wintext.c
 winval.o: ../win/X11/winval.c $(HACK_H) ../include/winX.h
